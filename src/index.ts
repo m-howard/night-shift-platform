@@ -1,171 +1,95 @@
 /**
- * Pulumi Automation API Entry Point (Orchestrator)
+ * Night Shift — bootstrap runner infrastructure.
  *
- * Orchestrates infra-global, infra-region, infra-datastore, infra-cluster, and infra-services
- * layers in correct dependency order with optional parallelization and scoping.
+ * One self-hosted GitHub Actions runner in an existing VPC, the S3 bucket it writes artifacts to,
+ * and the GitHub OIDC federation that lets workflows reach AWS without static credentials.
  *
- * Usage:
- *   node index.js <preview|deploy|destroy> <env> [--scope <layers>] [--regions <regions>]
- *
- * Examples:
- *   node index.js deploy prd
- *   node index.js preview dev --scope infra-cluster,infra-services
- *   node index.js destroy val --regions us-west-2
+ * The runner registers using a token a human places in SSM after the first deploy; see the bootstrap
+ * section of README.md. Everything here is deliberately small — this is the fleet's first instance,
+ * not the fleet.
  */
-import * as pulumi from '@pulumi/pulumi';
-import { InlineProgramArgs, LocalWorkspace } from '@pulumi/pulumi/automation';
-import { createStack as createAcctStack } from './stacks/acct-baseline';
-import { createStack as createFoundationStack } from './stacks/net-foundation';
-import { createStack as createStatefulStack } from './stacks/stateful-data';
-import { createStack as createPlatformStack } from './stacks/svc-platform';
-import { createStack as createWorkloadsStack } from './stacks/workloads';
 
-// --- Types & Constants ----------------------------------------------------------------
+import { ArtifactsBucket } from './components/artifacts-bucket.ts';
+import { GithubOidc } from './components/github-oidc.ts';
+import { RunnerIdentity } from './components/runner-identity.ts';
+import { RunnerInstance } from './components/runner-instance.ts';
+import { RunnerNetwork } from './components/runner-network.ts';
+import { RunnerRegistration } from './components/runner-registration.ts';
+import { loadStackConfig } from './config/load.ts';
+import { ConfigError } from './lib/errors.ts';
+import { buildTags } from './lib/tagging.ts';
 
-type PulumiAction = 'preview' | 'deploy' | 'destroy';
-const PULUMI_PLUGIN_VERSION = 'v4.0.0';
-const DEFAULT_REGION = 'us-east-1';
-const SUPPORTED_REGIONS = ['us-east-1', 'us-west-2', 'eu-west-1'];
+const config = loadStackConfig();
 
-interface Layer {
-    name: string;
-    create: (stackName: string) => Promise<void>;
-    getStacks: (env: string, regions: string[]) => string[];
-}
-
-const rolloutOrder: Layer[] = [
-    {
-        name: 'infra-global',
-        create: async (stackName: string) => {
-            await createAcctStack(stackName);
-        },
-        getStacks: (env) => [env],
-    },
-    {
-        name: 'infra-region',
-        create: async (stackName: string) => {
-            await createFoundationStack(stackName);
-        },
-        getStacks: (env, regions) => regions.map((r) => `${r}-${env}`),
-    },
-    {
-        name: 'infra-datastore',
-        create: async (stackName: string) => {
-            await createStatefulStack(stackName);
-        },
-        getStacks: (env, regions) => regions.map((r) => `${r}-${env}`),
-    },
-    {
-        name: 'infra-cluster',
-        create: async (stackName: string) => {
-            await createPlatformStack(stackName);
-        },
-        getStacks: (env, regions) => regions.map((r) => `${r}-${env}`),
-    },
-    {
-        name: 'infra-services',
-        create: async (stackName: string) => {
-            await createWorkloadsStack(stackName);
-        },
-        getStacks: (env, regions) => regions.map((r) => `${r}-${env}`),
-    },
-];
-
-// --- Helpers ---------------------------------------------------------------------------
-
-/** Validate action */
-const validateAction = (action?: string): PulumiAction => {
-    if (action === 'preview') return 'preview';
-    if (action === 'deploy' || action === 'destroy') return action;
-    throw new Error(`Invalid action: ${action}. Must be 'preview', 'deploy', or 'destroy'`);
-};
-
-/** Parse CLI args */
-const parseArgs = () => {
-    const raw = process.argv.slice(2);
-    const action = validateAction(raw[0]);
-    const env = raw[1] || process.env.NODE_ENV;
-    if (!env) throw new Error('Environment not specified. Provide as second argument or NODE_ENV.');
-
-    // flags
-    const scopesFlag = raw.includes('--scope') ? raw[raw.indexOf('--scope') + 1].split(',') : [];
-    const regionsFlag = raw.includes('--regions')
-        ? raw[raw.indexOf('--regions') + 1].split(',')
-        : SUPPORTED_REGIONS;
-
-    return { action, env, scopes: scopesFlag, regions: regionsFlag };
-};
-
-/** Run Pulumi on one stack */
-async function runOnStack(
-    layerName: string,
-    stackName: string,
-    createFn: (stack: string) => Promise<void>,
-    action: PulumiAction,
-) {
-    const projectName = layerName;
-    pulumi.log.info(`› [${layerName}] preparing stack ${stackName}`);
-    const args: InlineProgramArgs = {
-        projectName,
-        stackName,
-        program: async () => createFn(stackName),
-    };
-
-    const stack = await LocalWorkspace.createOrSelectStack(args);
-    await stack.setConfig('aws:region', { value: DEFAULT_REGION });
-    await stack.workspace.installPlugin('aws', PULUMI_PLUGIN_VERSION);
-    await stack.refresh({ onOutput: console.info, suppressProgress: true });
-
-    const opts = {
-        onOutput: console.info,
-        suppressProgress: true,
-        showSecrets: false,
-        color: 'always' as const,
-    };
-    pulumi.log.info(`› [${layerName}:${stackName}] ${action}`);
-
-    switch (action) {
-        case 'preview': {
-            await stack.preview(opts);
-            break;
-        }
-        case 'deploy': {
-            const res = await stack.up(opts);
-            console.dir(res.summary, { depth: 4 });
-            break;
-        }
-        case 'destroy': {
-            await stack.destroy(opts);
-            break;
-        }
-    }
-}
-
-// --- Orchestrator ----------------------------------------------------------------------
-
-const run = async () => {
-    const { action, env, scopes, regions } = parseArgs();
-    const isDestroy = action === 'destroy';
-
-    // Determine order
-    const layers = isDestroy ? [...rolloutOrder].reverse() : rolloutOrder;
-
-    for (const layer of layers) {
-        if (scopes.length && !scopes.includes(layer.name)) continue;
-
-        let stacks = layer.getStacks(env, regions);
-        if (isDestroy) stacks = stacks.reverse();
-
-        // Parallelize independent stacks
-        await Promise.all(
-            stacks.map((stackName) => runOnStack(layer.name, stackName, layer.create, action)),
-        );
-    }
-
-    pulumi.log.info('✅ All operations completed');
-};
-
-run().catch((err) => {
-    console.error(err);
-    process.exit(1);
+const artifacts = new ArtifactsBucket('artifacts', {
+  config,
+  tags: buildTags({ config, component: 'artifacts' }),
 });
+
+const registration = new RunnerRegistration('registration', {
+  config,
+  tags: buildTags({ config, component: 'registration' }),
+});
+
+const network = new RunnerNetwork('network', {
+  config,
+  tags: buildTags({ config, component: 'network' }),
+});
+
+const oidc = new GithubOidc('oidc', {
+  config,
+  tags: buildTags({ config, component: 'oidc' }),
+});
+
+const identity = new RunnerIdentity('identity', {
+  config,
+  tags: buildTags({ config, component: 'identity' }),
+  grants: {
+    bucketArn: artifacts.bucketArn,
+    objectsArn: artifacts.objectsArn,
+    parameterArn: registration.parameterArn,
+  },
+});
+
+// `validateSubnetIds` rejects an empty list, but `noUncheckedIndexedAccess` still types the first
+// element as possibly undefined. Fail closed rather than substituting a fallback: a wrong subnet id
+// would launch the runner somewhere nobody chose.
+const firstSubnetId = config.subnetIds[0];
+
+if (firstSubnetId === undefined) {
+  throw new ConfigError('subnetIds', 'must contain at least one entry');
+}
+
+const runner = new RunnerInstance('runner', {
+  config,
+  tags: buildTags({ config, component: 'runner' }),
+  placement: {
+    subnetId: firstSubnetId,
+    securityGroupId: network.securityGroupId,
+    instanceProfileName: identity.instanceProfileName,
+    parameterName: registration.parameterName,
+    dependencies: [identity.instanceProfile, registration.parameter],
+  },
+});
+
+/** Instance id, for `aws ssm start-session --target`. */
+export const runnerInstanceId = runner.instanceId;
+/** The runner's private address. There is no public one. */
+export const runnerPrivateIp = runner.privateIp;
+/** Security group protecting the runner. */
+export const runnerSecurityGroupId = network.securityGroupId;
+/** The instance role the runner assumes. */
+export const runnerRoleArn = identity.roleArn;
+/** Bucket holding job artifacts and build cache. */
+export const artifactsBucketName = artifacts.bucketName;
+/** Its ARN. */
+export const artifactsBucketArn = artifacts.bucketArn;
+/**
+ * The parameter a human must populate to finish the bootstrap. The token itself is never exported —
+ * stack outputs are readable by anyone who can read the state.
+ */
+export const registrationParameterName = registration.parameterName;
+/** The GitHub OIDC provider, created or adopted. */
+export const oidcProviderArn = oidc.providerArn;
+/** Role a workflow assumes via OIDC. */
+export const deployRoleArn = oidc.deployRoleArn;

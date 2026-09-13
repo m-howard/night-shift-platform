@@ -1,0 +1,27 @@
+config:
+  aws:region: us-east-1
+  nightshift:namePrefix: night-shift
+  nightshift:environment: dev
+  nightshift:repository: m-howard/night-shift
+  # Replace both before the first `pulumi up` — these are placeholders, not defaults.
+  #
+  # The subnets MUST have a route to a NAT gateway. The runner is launched without a public IP and
+  # must reach github.com outbound to register and collect jobs; in a subnet with no egress it boots,
+  # looks healthy in the console, and silently never appears in the repository's runner list.
+  nightshift:vpcId: vpc-00000000000000000
+  nightshift:subnetIds:
+    - subnet-00000000000000000
+  nightshift:instanceType: t3.medium
+  nightshift:rootVolumeSizeGib: '64'
+  nightshift:artifactExpiryDays: '30'
+  nightshift:runnerGroup: Default
+  nightshift:runnerLabels:
+    - self-hosted
+    - linux
+    - x64
+    - night-shift
+  # An AWS account holds at most one OIDC provider per issuer URL. If `pulumi up` fails with
+  # EntityAlreadyExists, the account already has one: set this to 'false' and put its ARN in
+  # nightshift:existingOidcProviderArn.
+  nightshift:createOidcProvider: 'true'
+  # nightshift:existingOidcProviderArn: arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com

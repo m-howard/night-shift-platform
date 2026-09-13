@@ -1,325 +1,171 @@
-<h1 align="center">AWS Pulumi Infrastructure</h1>
+<h1 align="center">Night Shift</h1>
 
 <p align="center">
-  <em>A complete, production-ready AWS infrastructure deployment solution</em>
-  <br>
-  <em>Deploy full web application infrastructure to AWS using Pulumi, TypeScript, and GitHub Actions</em>
+  <em>A crew of GitHub Copilot cloud agents that maintains the self-hosted GitHub Actions
+  infrastructure they run on.</em>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/TypeScript-5.7.3-blue?style=flat-square&logo=typescript" alt="TypeScript">
-  <img src="https://img.shields.io/badge/Pulumi-latest-purple?style=flat-square&logo=pulumi" alt="Pulumi">
+  <img src="https://img.shields.io/badge/TypeScript-6.0-blue?style=flat-square&logo=typescript" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Bun-1.3-black?style=flat-square&logo=bun" alt="Bun">
+  <img src="https://img.shields.io/badge/Node-24-339933?style=flat-square&logo=nodedotjs" alt="Node">
+  <img src="https://img.shields.io/badge/Pulumi-3.256-purple?style=flat-square&logo=pulumi" alt="Pulumi">
   <img src="https://img.shields.io/badge/AWS-orange?style=flat-square&logo=amazon-aws" alt="AWS">
-  <img src="https://img.shields.io/badge/GitHub%20Actions-2088FF?style=flat-square&logo=github-actions" alt="GitHub Actions">
-  <img src="https://img.shields.io/badge/Jest-29.7.0-red?style=flat-square&logo=jest" alt="Jest">
-  <img src="https://img.shields.io/badge/ESLint-9.18.0-purple?style=flat-square&logo=eslint" alt="ESLint">
+  <img src="https://img.shields.io/badge/Vitest-4.1-6E9F18?style=flat-square&logo=vitest" alt="Vitest">
+  <img src="https://img.shields.io/badge/ESLint-10-4B32C3?style=flat-square&logo=eslint" alt="ESLint">
 </p>
 
-## ✨ Features
+## ✨ What this is
 
-- 🚀 **Infrastructure as Code** - Pulumi Automation API with TypeScript
-- ☁️ **AWS Native** - Deploy full web application infrastructure to AWS
-- 🏗️ **Layered Architecture** - 5-layer dependency model with proper separation
-- 🔄 **CI/CD Ready** - GitHub Actions workflows for automated deployments
-- 🧩 **Reusable Components** - Modular AWS Pulumi components
-- 🧪 **Comprehensive Testing** - Jest with unit, integration, and e2e tests
-- 📝 **Code Quality** - ESLint + Prettier for consistent code style
-- 🌍 **Multi-Region** - Deploy across multiple AWS regions
-- 🔒 **Blue/Green Ready** - Zero-downtime deployment strategies
+Platform teams are asked to do more with fewer hands, but the maintenance never stops: version
+bumps, bug fixes, security findings, and a steady stream of vendor releases.
 
-## 🚀 Quick Start
+Night Shift is a working demonstration of the second shift. Agents clock in overnight against this
+repository's own infrastructure — they update dependencies, read release notes and vendor blogs,
+open pull requests, classify each operational change by risk, and auto-deploy the changes policy
+already approves. Everything else escalates to a human in the morning.
+
+The point of the pattern is the boundary: what agents can safely own, what stays gated, and how a
+human keeps control of everything that matters.
+
+## 🚀 Quick start
+
+The repository ships a dev container with Node, Bun, the Pulumi CLI, the AWS CLI and `gh` already
+pinned to the versions this repo declares. Open it in VS Code and reopen in container, then:
 
 ```bash
-# Clone the repository
-git clone <your-repo-url>
-cd aws-pulumi-infrastructure
-
-# Install dependencies and set up development environment
-npm install
-npm run setup
-
-# Configure AWS credentials
-aws configure
-
-# Quick development preview
-npm run dev
-
-# Deploy full infrastructure to development
-npm run deploy:dev
+bun install         # post-create already runs this
+bun run test        # unit suite — no credentials, no network
+bun run lint
+bun run typecheck
 ```
 
-## 🏗️ Layered Architecture
+For infrastructure work, state lives in the local file backend:
 
-This project follows a 5-layer dependency model based on AWS best practices:
+```bash
+cp .env.example .env    # set AWS_REGION and PULUMI_CONFIG_PASSPHRASE
+pulumi login --local
+```
+
+## 🏗️ Architecture
+
+> **Status:** the bootstrap stack is written — one runner, not yet a fleet.
+
+The Pulumi stack under `src/` describes the self-hosted Actions runner infrastructure on AWS — the
+same infrastructure the night shift's own jobs execute on, which is what makes the demonstration
+honest. It deploys into a VPC that already exists; this stack never creates one.
+
+| Component            | What it creates                                                            |
+| -------------------- | -------------------------------------------------------------------------- |
+| `ArtifactsBucket`    | S3 bucket for job artifacts and build cache, encrypted, lifecycle-expired. |
+| `RunnerRegistration` | The SSM `SecureString` holding the GitHub registration token.              |
+| `RunnerNetwork`      | Security group with **no ingress** and outbound HTTPS only.                |
+| `RunnerIdentity`     | Instance role, scoped policies and instance profile.                       |
+| `GithubOidc`         | GitHub OIDC provider and the role workflows assume.                        |
+| `RunnerInstance`     | One EC2 runner: no public IP, no key pair, IMDSv2 required.                |
+
+Shell access is AWS Systems Manager Session Manager only — there is no SSH, no key pair and no
+inbound rule. Pure logic (naming, tagging, config validation, IAM documents, the boot script) lives
+in `src/lib/` and `src/config/`, separately from the components, because it is the part a unit test
+can reach without an engine or credentials.
+
+### Deploying
+
+```bash
+pulumi stack select dev
+pulumi config set nightshift:vpcId vpc-…          # an existing VPC
+pulumi config set --path nightshift:subnetIds[0] subnet-…
+pulumi preview                                     # attach this to the pull request
+pulumi up
+```
+
+The configured subnets **must have a route to a NAT gateway**. The runner is launched without a
+public IP and must reach github.com outbound; in a subnet with no egress it boots, looks healthy in
+the console, and silently never appears in the repository's runner list.
+
+Every configuration key, its default and what happens when it is absent are documented in
+[`.env.example`](.env.example) and `Pulumi.dev.yaml`. A missing or malformed value fails
+`pulumi preview` naming the key, rather than deploying something nobody chose.
+
+### Finishing the bootstrap
+
+The stack creates the registration-token parameter holding a placeholder and then deliberately stops
+watching its value, so a real token can be placed by hand without being reverted on the next deploy.
+After the first `pulumi up`:
+
+1. Generate a registration token under **Settings → Actions → Runners → New self-hosted runner** in
+   the repository.
+2. Put it in the parameter named by the `registrationParameterName` stack output:
+
+   ```bash
+   aws ssm put-parameter --name "$(pulumi stack output registrationParameterName)" \
+     --type SecureString --overwrite --value "<token>"
+   ```
+
+3. Reboot the instance so cloud-init runs again.
+
+**Registration tokens expire one hour after they are generated.** Steps 2 and 3 have to happen
+inside that window; if the runner does not appear, generate a fresh token and repeat rather than
+debugging the instance. Because the stack ignores this value by design, Pulumi will never report
+that the token has expired.
+
+If `pulumi up` fails with `EntityAlreadyExists` on the OIDC provider, the account already has one —
+an account may hold only one per issuer URL. Set `nightshift:createOidcProvider` to `false` and put
+the existing provider's ARN in `nightshift:existingOidcProviderArn`.
+
+## 📁 Project structure
 
 ```text
-  acct-baseline (Account-wide policies, roles, config rules)
-        ↓
-net-foundation (VPC, subnets, gateways, endpoints, certs)
-        ↓
- ┌──────────────────┐
- ↓                  ↓
-stateful-data    svc-platform (Clusters, service mesh, observability)
-        ↓
-     workload (Application services & blue/green deployments)
+.devcontainer/       # Pinned toolchain — versions are read from .nvmrc, .bun-version, package.json
+.github/workflows/   # GitHub Actions pipelines
+docs/adr/            # Architecture decision records
+src/                 # The Pulumi stack — AWS runner infrastructure
+├── components/      # Reusable Pulumi components, one per file
+├── config/          # Configuration schema, validation and loading
+└── lib/             # Pure logic: naming, tagging, IAM documents, the boot script
+tests/
+├── unit/            # No credentials, no network — the default `bun run test`
+├── integration/     # Runs against live AWS; fails loudly when unconfigured
+└── helpers/         # Test helpers
+scripts/             # Repository tooling
 ```
 
-Each layer builds upon the previous one, ensuring proper dependency management and isolated failure domains.
-
-## 📁 Project Structure
-
-```text
-src/
-├── index.ts           # Main Pulumi automation API orchestrator
-├── components/        # Reusable AWS Pulumi components
-├── stacks/           # 5-layer stack definitions
-│   ├── acct-baseline.ts    # Account baseline
-│   ├── net-foundation.ts   # Network foundation
-│   ├── svc-platform.ts     # Service platform
-│   ├── stateful-data.ts    # Data storage
-│   └── workloads.ts        # Application workloads
-└── utils/            # Infrastructure utility functions
-
-.github/workflows/    # GitHub Actions CI/CD pipelines
-test/                # Infrastructure and component tests
-docs/                # Architecture and deployment documentation
-```
-
-## 🛠️ Available Scripts
-
-### **Core Development**
-
-| Script             | Description                      |
-| ------------------ | -------------------------------- |
-| `npm run dev`      | Quick development preview        |
-| `npm run start`    | Alias for `dev`                  |
-| `npm run build`    | Compile TypeScript to JavaScript |
-| `npm run test`     | Run infrastructure tests         |
-| `npm run test:cov` | Run tests with coverage          |
-| `npm run lint`     | Check and fix code quality       |
-| `npm run format`   | Format code with Prettier        |
-
-### **Environment Deployments**
-
-| Script                | Description                       |
-| --------------------- | --------------------------------- |
-| `npm run deploy:dev`  | Deploy all layers to development  |
-| `npm run deploy:val`  | Deploy all layers to validation   |
-| `npm run deploy:prd`  | Deploy all layers to production   |
-| `npm run destroy:dev` | Destroy all layers in development |
-| `npm run destroy:val` | Destroy all layers in validation  |
-| `npm run destroy:prd` | Destroy all layers in production  |
-| `npm run preview:dev` | Preview changes in development    |
-| `npm run preview:val` | Preview changes in validation     |
-| `npm run preview:prd` | Preview changes in production     |
-
-### **Specialized Deployments**
-
-| Script                        | Description                          |
-| ----------------------------- | ------------------------------------ |
-| `npm run deploy:foundation`   | Deploy account baseline + networking |
-| `npm run deploy:platform`     | Deploy foundation + services + data  |
-| `npm run destroy:platform`    | Destroy platform components only     |
-| `npm run deploy:multi-region` | Deploy across multiple regions       |
-
-## 💻 Usage Examples
-
-### **Quick Development Workflow**
-
-```bash
-# Start development - preview all infrastructure
-npm run dev
-
-# Deploy to development environment
-npm run deploy:dev
-
-# Make changes and preview
-npm run preview:dev
-
-# Deploy changes
-npm run deploy:dev
-```
-
-### **Environment Promotion**
-
-```bash
-# 1. Test in development
-npm run deploy:dev
-npm run test
-
-# 2. Promote to validation
-npm run deploy:val
-
-# 3. Deploy to production
-npm run deploy:prd
-```
-
-### **Incremental Deployments**
-
-```bash
-# Deploy just the foundation layers
-npm run deploy:foundation
-
-# Deploy platform components (foundation + services + data)
-npm run deploy:platform
-
-# Deploy specific layers using the orchestrator directly
-npx ts-node src/index.ts deploy dev --scope workload --regions us-east-1
-
-# Deploy to multiple regions
-npm run deploy:multi-region
-```
-
-### **Infrastructure Testing**
-
-```bash
-# Run all infrastructure tests
-npm run test
-
-# Run tests with coverage
-npm run test:cov
-
-# Run end-to-end tests
-npm run test:e2e
-
-# Validate project setup
-npm run validate
-```
-
-### **Custom Orchestration**
-
-For advanced use cases, use the orchestrator directly:
-
-```bash
-# Deploy specific layers
-npx ts-node src/index.ts deploy prd --scope acct-baseline,net-foundation --regions us-east-1
-
-# Multi-region deployment
-npx ts-node src/index.ts deploy prd --scope workload --regions us-east-1,us-west-2,eu-west-1
-
-# Preview changes with specific scope
-npx ts-node src/index.ts preview val --scope svc-platform,stateful-data --regions us-east-1
-```
-
-## 🎯 Layer Dependencies
-
-### **Account Baseline** (`acct-baseline`)
-
-- Account-wide IAM policies and roles
-- Config rules and compliance
-- CloudTrail and security settings
-- **Scope**: Per AWS Account
-
-### **Network Foundation** (`net-foundation`)
-
-- VPC, subnets, and routing
-- Internet/NAT gateways
-- VPC endpoints and certificates
-- **Scope**: Per Region
-
-### **Service Platform** (`svc-platform`)
-
-- EKS/ECS clusters
-- Service mesh configuration
-- Platform observability
-- **Scope**: Per Region
-
-### **Stateful Data** (`stateful-data`)
-
-- RDS databases
-- ElastiCache clusters
-- S3 buckets and storage
-- **Scope**: Per Region
-
-### **Workload** (`workload`)
-
-- Application services
-- Blue/green deployments
-- Application-specific resources
-- **Scope**: Per Region
-
-## 🔧 Environment Configuration
-
-The infrastructure supports environment-based configuration with different resource sizing and features:
-
-```typescript
-// Development environment
-const devConfig = {
-    region: 'us-east-1',
-    instanceType: 't3.micro',
-    minCapacity: 1,
-    maxCapacity: 2,
-    multiAz: false,
-};
-
-// Production environment
-const prdConfig = {
-    region: 'us-east-1',
-    instanceType: 't3.large',
-    minCapacity: 2,
-    maxCapacity: 10,
-    multiAz: true,
-};
-```
-
-## 🚦 Deployment Strategies
-
-### **Blue/Green Deployments**
-
-The architecture supports both cluster-level and service-level blue/green deployments:
-
-```bash
-# Deploy new version (blue)
-npm run deploy:dev
-
-# Switch traffic and verify
-# Deploy green version
-npx ts-node src/index.ts deploy dev --scope workload --regions us-east-1
-
-# Destroy old version after validation
-npx ts-node src/index.ts destroy dev --scope workload --regions us-east-1 --target blue
-```
-
-### **Multi-Region Strategy**
-
-```bash
-# Deploy to primary region
-npm run deploy:prd
-
-# Deploy to secondary regions
-npx ts-node src/index.ts deploy prd --scope net-foundation,svc-platform,stateful-data,workload --regions us-west-2,eu-west-1
-```
-
-## 🗝️ Pulumi State Backend Setup
-
-To use a self-managed Pulumi state backend (such as AWS S3 or local filesystem), use the provided login script:
-
-```bash
-./scripts/pulumi-login.sh
-```
-
-This script will prompt you to select and configure your preferred backend for storing Pulumi state files. For AWS projects, S3 is recommended for team use.
-
-## 📖 Documentation
-
-- [Software Architecture](./docs/SOFTWARE_ARCHITECTURE.md) - Complete architectural overview
-- [Infrastructure Guide](./docs/README.md) - Detailed deployment guide
-- [Testing Architecture](./docs/TESTING_ARCHITECTURE.md) - Testing strategies and patterns
-
-## 🔒 Security & Compliance
-
-- **Least Privilege**: IAM roles with minimal required permissions
-- **Encryption**: All data encrypted at rest and in transit
-- **Network Security**: VPC with proper subnet isolation
-- **Compliance**: AWS Config rules for governance
-- **Monitoring**: CloudTrail and CloudWatch for observability
+## 💻 Scripts
+
+| Command                    | What it does                                               |
+| -------------------------- | ---------------------------------------------------------- |
+| `bun run test`             | Unit suite. Safe to run anywhere.                          |
+| `bun run test:watch`       | Unit suite in watch mode.                                  |
+| `bun run test:coverage`    | Unit suite with V8 coverage.                               |
+| `bun run test:integration` | Live-AWS suite. Requires real credentials — see below.     |
+| `bun run typecheck`        | `tsc --noEmit` over `src`, `tests` and `scripts`.          |
+| `bun run lint`             | ESLint, type-aware.                                        |
+| `bun run lint:md`          | markdownlint.                                              |
+| `bun run format`           | Prettier, writing in place.                                |
+| `bun run clean`            | Removes build output; `--all` also removes `node_modules`. |
+| `bun run preview`          | `pulumi preview` — the output a pull request must carry.   |
+| `bun run deploy`           | `pulumi up`.                                               |
+| `bun run refresh`          | Reconciles state with what is actually in the account.     |
+| `bun run destroy`          | Tears the stack down.                                      |
+
+### Testing against live infrastructure
+
+`bun run test:integration` talks to a real AWS account and is deliberately **not** part of
+`bun run test`. Missing configuration fails the run and names the variable rather than skipping —
+a suite that reports green having tested nothing is the one failure mode an auto-deploy pipeline
+cannot afford.
+
+## 📖 Conventions
+
+[AGENTS.md](AGENTS.md) records the conventions this repository enforces, for humans and agents
+alike. `eslint.config.mjs` encodes most of them; the ones a linter cannot check live in that file.
 
 ## 📄 License
 
-UNLICENSED - Free to use for any purpose
+MIT
 
 ---
 
 <p align="center">
-  <em>Happy coding! 🚀</em>
+  <em>Good night. The shift starts at midnight. 🌙</em>
 </p>

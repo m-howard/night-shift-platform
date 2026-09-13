@@ -1,0 +1,67 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildUserData > matches its approved form 1`] = `
+"#!/usr/bin/env bash
+# Managed by Pulumi (src/lib/userdata.ts). Edits here are overwritten on the next deploy.
+set -euo pipefail
+
+log() { echo "[night-shift] $*" | systemd-cat -t night-shift-bootstrap || echo "[night-shift] $*"; }
+
+# The runner is a .NET application: without libicu it installs cleanly and then fails to start,
+# which is the most common silent failure on Amazon Linux 2023. tar is not in the minimal AMI.
+log "installing prerequisites"
+dnf install -y libicu tar
+
+log "creating the runner service account"
+id -u runner >/dev/null 2>&1 || useradd --create-home --shell /bin/bash runner
+install -d -o runner -g runner /opt/actions-runner
+
+log "downloading actions runner 2.336.0"
+cd /opt/actions-runner
+curl -fsSL --max-time 120 -o "actions-runner-linux-x64-2.336.0.tar.gz" "https://github.com/actions/runner/releases/download/v2.336.0/actions-runner-linux-x64-2.336.0.tar.gz"
+
+# Verify before extracting: the tarball is unpacked and its scripts run with root's privileges, so
+# an unverified download is arbitrary code execution with a network in the middle.
+log "verifying checksum"
+echo "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d  actions-runner-linux-x64-2.336.0.tar.gz" | sha256sum --check --status
+tar -xzf "actions-runner-linux-x64-2.336.0.tar.gz" --owner=runner
+rm -f "actions-runner-linux-x64-2.336.0.tar.gz"
+chown -R runner:runner /opt/actions-runner
+
+# Fetched at boot via the instance role — no credentials are baked into user data, which is
+# readable by anything that can reach the metadata service.
+log "reading the registration token from SSM"
+TOKEN="$(aws ssm get-parameter \\
+  --name "/night-shift/dev/runner-registration-token" \\
+  --with-decryption \\
+  --region "us-east-1" \\
+  --query Parameter.Value \\
+  --output text)"
+
+# Fail loudly rather than registering nothing. A runner that never appears in the repository's
+# runner list is otherwise indistinguishable from one that is merely slow to boot.
+if [ "\${TOKEN}" = "placeholder-replace-me" ]; then
+  log "registration token is still the placeholder — put a real token in /night-shift/dev/runner-registration-token and reboot"
+  exit 1
+fi
+
+# --unattended because there is no TTY; --replace so replacing this instance supersedes the stale
+# registration of the same name instead of colliding with it.
+log "registering with https://github.com/m-howard/night-shift"
+sudo -u runner /opt/actions-runner/config.sh \\
+  --unattended \\
+  --replace \\
+  --url "https://github.com/m-howard/night-shift" \\
+  --token "\${TOKEN}" \\
+  --name "night-shift-dev-runner" \\
+  --runnergroup "Default" \\
+  --labels "self-hosted,linux,x64,night-shift" \\
+  --work _work
+
+log "installing the runner service"
+/opt/actions-runner/svc.sh install runner
+/opt/actions-runner/svc.sh start
+
+log "bootstrap complete"
+"
+`;

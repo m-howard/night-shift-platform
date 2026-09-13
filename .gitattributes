@@ -76,6 +76,9 @@
 # Text files where line endings should be preserved
 *.patch    -text
 
+# Lockfile. Bun is the only package manager. Collapse it in review.
+bun.lock       -diff linguist-generated
+
 #
 # Exclude files from exporting
 #

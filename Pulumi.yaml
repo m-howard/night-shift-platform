@@ -1,0 +1,4 @@
+name: night-shift
+description: Self-hosted GitHub Actions runner infrastructure for m-howard/night-shift.
+runtime: nodejs
+main: src/index.ts

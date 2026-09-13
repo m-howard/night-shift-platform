@@ -1,366 +1,277 @@
-# Agent Instructions for AWS Pulumi Infrastructure Repository
+# Working in this repository
 
-> **Note:** When updating this file, ensure that `.github/copilot-instructions.md` is updated to reflect the same changes. Other than the title, the files should be the same.
+Conventions for anybody changing this code — human or agent. `eslint.config.mjs` enforces most of
+what follows; this file exists for the reasoning behind the rules and for the ones a linter cannot
+check.
 
-## Project Overview
+Start with the three commands below, then Repository layout, then whichever section matches the
+change you are making. If you are an agent, read the last section before you open anything.
 
-This is a comprehensive AWS infrastructure deployment solution using Pulumi, TypeScript, and GitHub Actions. It provides the ability to deploy full web application infrastructure to AWS leveraging a multi-stack architecture for different deployment lifecycles (dev, val, prd). All infrastructure is deployed to us-east-1 by default and follows AWS best practices.
+## Toolchain
 
-### Key Technologies
+Bun is the only package manager. `bun.lock` is the only lockfile, and it is committed. Node and Bun
+versions come from `.nvmrc` and `.bun-version`; the Pulumi CLI version is read from the
+`@pulumi/pulumi` pin in `package.json`. The dev container reads all three at build time, so there
+is exactly one place to bump each.
 
-- **TypeScript 5.7.3** - Main programming language with strict type checking
-- **Pulumi** - Infrastructure as code using the Automation API
-- **AWS SDK** - AWS service integrations and resource management
-- **GitHub Actions** - CI/CD pipelines for automated infrastructure deployment
-- **Jest 29.7.0** - Testing framework for infrastructure components
-- **ESLint 9.18.0** - Code linting and quality enforcement
-- **Prettier 3.4.2** - Code formatting
-
-## Project Structure
-
-```text
-src/
-├── index.ts           # Main Pulumi automation API entry point
-├── components/       # Reusable AWS Pulumi components
-│   ├── networking/   # VPC, subnets, security groups
-│   ├── compute/      # ECS, EC2, load balancers
-│   ├── storage/      # S3, RDS, ElastiCache
-│   ├── monitoring/      # CloudWatch, alarms
-│   └── index.ts   # Infrastructure component exports
-├── stacks/          # Multi-stack definitions
-└── utils/           # Infrastructure utility functions
-    ├── helpers.ts   # General helper functions
-    └── logger.ts    # Logging utilities
-
-.github/workflows/   # GitHub Actions CI/CD pipelines
-configs/            # Environment-based configurations
-test/              # Infrastructure and component tests
-├── *.spec.ts      # Unit tests for components
-├── *.e2e.spec.ts  # End-to-end infrastructure tests
-└── jest-e2e.json  # E2E test configuration
-
-bin/               # Compiled JavaScript output
-docs/              # Infrastructure documentation
+```bash
+bun run lint && bun run lint:md
+bun run typecheck
+bun run test
 ```
 
-## Coding Standards & Best Practices
+Those three commands are what a reviewer runs. A change that does not pass them is not finished.
 
-### General Code Style
+Nothing else runs them for you. The only workflow is CodeQL, and the pre-commit hook runs
+`nano-staged`, which formats and lints the staged files and nothing more — no typecheck, no tests.
+That is why the block above is a contract rather than a convenience.
 
-- Use single quotes for all strings.
-- Semicolon is required at the end of every statement.
-- Indentation must be 4 spaces.
-- Always prefer async/await for asynchronous operations; avoid callbacks.
-- Follow Prettier and ESLint configurations for consistent code style.
-- Include proper error handling for all async operations.
-- Avoid mutable state where possible; prefer immutable patterns.
-- Ensure code is well-tested with appropriate unit and integration tests.
-- Prefer Pulumi custom components to encapsulate resources for reusability and maintainability.
+## Repository layout
 
-### TypeScript Guidelines
+| Path                 | Holds                                                                        |
+| -------------------- | ---------------------------------------------------------------------------- |
+| `src/`               | The Pulumi stack — the AWS runner fleet. **Planned, not yet written.**       |
+| `src/components/`    | Reusable Pulumi components, grouped by concern. One component per file.      |
+| `tests/unit/`        | The default `bun run test`. No credentials, no network.                      |
+| `tests/integration/` | Live-AWS suite, opt-in. Fails loudly when unconfigured.                      |
+| `tests/helpers/`     | Test helpers. Covered by the coverage report, so they get tests too.         |
+| `scripts/`           | Repository tooling. Executed directly, never imported by `src/`.             |
+| `.devcontainer/`     | The dev image. Reads the version files — never pin a toolchain version here. |
+| `.github/`           | CodeQL, Dependabot, CODEOWNERS, and the issue and pull request templates.    |
+| `.husky/`            | Git hooks. One user hook: `pre-commit`, which runs `nano-staged`.            |
 
-- **Strict Mode**: Always use strict TypeScript settings (enabled in tsconfig.json)
-- **Type Safety**: Prefer explicit types over `any`, use proper generics
-- **Null Safety**: Use strict null checks, prefer optional chaining (`?.`)
-- **Interfaces vs Types**: Use interfaces for object shapes, types for unions/primitives
-- **Naming Conventions**:
-    - Classes: PascalCase (`VpcComponent`, `EcsService`)
-    - Functions/Variables: camelCase (`createVpc`, `isValid`)
-    - Constants: UPPER_SNAKE_CASE (`DEFAULT_REGION`, `MAX_RETRY_ATTEMPTS`)
-    - Files: kebab-case (`vpc-component.ts`) or camelCase (`vpcComponent.ts`)
+`src/` holds one file today — an empty placeholder. The stack lands there, not in a separate `infra/`
+tree, so `eslint.config.mjs` scopes its infrastructure rules to `src/**`: 80-line functions, default
+exports permitted, and `no-new` off for resource constructors used purely for their effect on the
+graph. Those rules are already in place so the stack lands inside them rather than being retrofitted.
+Do not invent a different location for it.
 
-### Infrastructure Organization
+## File placement
 
-- **Reusability**: Create modular components that can be reused across stacks
-- **Resource Tagging**: Apply consistent tagging strategy for cost tracking and compliance
-- **Security First**: Follow AWS security best practices in all components
-- **Documentation**: Use JSDoc comments for all infrastructure components
+- **Tests live under `tests/`**, split by what they are allowed to touch — never beside the code
+  they test. `vitest.config.ts` globs `tests/unit/**` and `tests/integration/**` only, so a
+  co-located `*.test.ts` silently never runs, which is the worst outcome available.
+- **Scripts live under `scripts/`.** Every maintenance, debugging, generation or one-shot script
+  goes there, whatever its extension. `scripts/**/*.ts` already has an ESLint override permitting
+  `console` and default exports, because those files are executed rather than imported.
+- **One exported concept per file.** If a file grows a second unrelated export, split it.
+- **Group by feature, not by kind**, once there is enough code for the question to arise.
 
-### File Structure Patterns
+The repository root holds configuration and nothing else:
+
+- Config — `tsconfig.json`, `vitest.config.ts`, `eslint.config.mjs`, `.prettierrc`,
+  `.markdownlint.jsonc`, `.editorconfig`
+- Dependencies — `package.json`, `bun.lock`, `.npmrc`
+- Documentation — `README.md`, `AGENTS.md`, `SECURITY.md`
+- Ignores, CI and version pins — `.gitignore`, `.gitattributes`, `.prettierignore`,
+  `.markdownlintignore`, `.nvmrc`, `.bun-version`, `.env.example`
+
+Anything else belongs in a subdirectory. The root is the first thing a reader — or an agent loading
+context — sees, and every file added to it costs everyone who arrives afterwards.
+
+## Commands
+
+| Command                    | What it does                                                        |
+| -------------------------- | ------------------------------------------------------------------- |
+| `bun run test`             | Unit suite. Safe to run anywhere, on any machine.                   |
+| `bun run test:watch`       | Unit suite in watch mode.                                           |
+| `bun run test:coverage`    | Unit suite with V8 coverage.                                        |
+| `bun run test:integration` | Live-AWS suite. Real credentials required.                          |
+| `bun run typecheck`        | `tsc --noEmit` over `src`, `tests`, `scripts` and the root configs. |
+| `bun run lint`             | ESLint, type-aware.                                                 |
+| `bun run lint:fix`         | The same, writing fixes.                                            |
+| `bun run lint:md`          | markdownlint over every Markdown file.                              |
+| `bun run format`           | Prettier, writing in place.                                         |
+| `bun run format:check`     | Prettier in check mode.                                             |
+| `bun run clean`            | Removes build output; `--all` also drops `node_modules`.            |
+
+Coverage is reported over `src/**` and `tests/helpers/**`. There is no threshold configured — the
+number is information for a reviewer, not a gate, and this file will say so until one exists.
+
+There is no build step. `tsc` is a checker: `noEmit` is on, `allowImportingTsExtensions` is on, and
+Bun runs the TypeScript directly.
+
+## Code clarity
+
+- **No magic numbers.** `-1`, `0`, `1` and `2` read fine as literals; everything else gets a named
+  constant explaining what the number _is_.
+- **Bounded functions.** 50 lines and 3 parameters. Declarative resource wiring in `src/` gets 80
+  lines, because splitting `createRunnerFleet` in half produces a function that exists only to
+  satisfy a line count and a reader holding two names instead of one.
+- **Bounded files.** 600 lines, blank lines and comments not counted. A file past that is holding
+  more than one concept; find the seam and split there rather than at line 600.
+- **No nested ternaries**, and `===` always.
+- **Named exports** everywhere the rule applies. Default exports are permitted only where a
+  framework demands them: the Pulumi stack in `src/`, and directly executed scripts and configs.
+  Prefer a named export even there, and add the default alongside it rather than instead of it.
+- **Imports are ordered**: built-ins, external packages, internal absolute, relative, then
+  type-only, alphabetised with blank lines between groups. Relative imports carry their real `.ts`
+  extension.
+- **No `console`** outside `scripts/` and config files, where output is the interface.
+
+Names: `camelCase` for variables and functions, `PascalCase` for types and classes,
+`UPPER_SNAKE_CASE` for true constants, `kebab-case` for filenames. Booleans start with `is`, `has`,
+`can` or `should`. A name that needs a comment to be understood is the wrong name.
+
+Formatting is Prettier's job, not yours — single quotes, semicolons, two-space indent, 100
+characters, trailing commas. Never hand-format around it.
+
+Test files relax the magic-number and file-length rules on purpose. A table-driven test asserting on
+forty literals is doing its job, and breaking it up to satisfy a line count makes it worse.
+
+## Comments
+
+Comment the _why_, never the _what_. A comment restating the line below it is noise that goes stale
+independently of the code. The comments worth writing explain a decision a reader would otherwise
+undo: why a pin exists, why a check is fail-closed, what breaks if the order changes. Only comment non-trivial code.
+
+## Tests
+
+Everything under `tests/`:
+
+- `tests/unit/` — the default `bun run test`. No credentials, no network. Must pass on any machine.
+- `tests/integration/` — runs against live AWS, opt-in via `bun run test:integration`. Read
+  configuration at module scope so an unconfigured run fails during collection, before a test body
+  has created anything in a real account. Timeouts are 60s, because real AWS calls are slow and
+  rate-limited.
+- `tests/helpers/` — helpers. Covered by the coverage report, so they carry tests of their own;
+  `tests/helpers/env.ts` is the worked example.
+
+These are two Vitest projects rather than one suite with skips, so that `bun run test` is
+unconditionally safe and the integration project is free to fail hard the moment it is
+misconfigured.
+
+**If you change code under `src/`, tests land in the same pull request.** Not the next one.
+
+## Infrastructure changes
+
+The Pulumi stack under `src/` is the infrastructure this repository's own jobs run on, so a mistake
+here takes CI down with it.
+
+- Attach or summarise the `pulumi preview` output on the pull request. This is the human gate.
+- Grant no permission wider than the work in front of it requires.
+- State the cost impact.
+- Record architectural decisions as an ADR that says what the decision **costs**, not only what it
+  buys.
+
+### Infrastructure organization
+
+- **Reusability**: create modular components that can be reused across stacks.
+- **Resource tagging**: apply a consistent tagging strategy for cost tracking and compliance. An
+  untagged resource is one nobody can attribute a bill to.
+- **Security first**: follow AWS security best practices in every component.
+- **Documentation**: JSDoc every exported component — parameters, what it creates, and an example.
+- **Testable logic**: keep pure logic (naming, policy construction, config validation) in its own
+  module. It is the only part of a stack a unit test can reach without an engine.
+
+### File structure patterns
+
+One `ComponentResource` subclass per resource group, per file. Register outputs explicitly and
+declare real dependencies with `dependsOn` rather than relying on inference.
 
 ```typescript
-// Standard infrastructure component structure
 /**
  * AWS VPC Component - Creates and manages VPC infrastructure
  */
 
-// Imports (external libraries first, then internal)
 import * as aws from '@pulumi/aws';
 import * as pulumi from '@pulumi/pulumi';
-import { ComponentArgs } from '../types';
+
+import { type ComponentArgs } from './types.ts';
 
 // Types and interfaces
-interface VpcArgs extends ComponentConfig {
-    cidrBlock: string;
-    enableDnsHostnames?: boolean;
+interface VpcArgs extends ComponentArgs {
+  cidrBlock: string;
+  enableDnsHostnames?: boolean;
 }
 
 // Main component implementation
 export class VpcComponent extends pulumi.ComponentResource {
-    public readonly vpc: aws.ec2.Vpc;
-    public readonly publicSubnets: aws.ec2.Subnet[];
-    public readonly privateSubnets: aws.ec2.Subnet[];
+  public readonly vpc: aws.ec2.Vpc;
+  public readonly publicSubnets: aws.ec2.Subnet[];
+  public readonly privateSubnets: aws.ec2.Subnet[];
 
-    constructor(name: string, args: VpcArgs, opts?: pulumi.ComponentResourceOptions) {
-        super('aws:networking:VpcComponent', name, {}, opts);
+  constructor(name: string, args: VpcArgs, opts?: pulumi.ComponentResourceOptions) {
+    super('aws:networking:VpcComponent', name, {}, opts);
 
-        // Implementation
-    }
+    // Implementation
+
+    this.registerOutputs({
+      vpc: this.vpc,
+      publicSubnets: this.publicSubnets,
+      privateSubnets: this.privateSubnets,
+    });
+  }
 }
 
 // Default export (if applicable)
 export default VpcComponent;
 ```
 
-## Development Workflow
+## Documentation
 
-### Available Scripts
+Update the documentation in the pull request that changes the behaviour. A stale document is worse
+than a missing one, because a reader trusts it.
 
-#### Core Development
+- Document configuration exhaustively — every variable, its default, and what happens when it is
+  absent. `.env.example` is the contract.
+- Document non-obvious behaviour: edge cases, fail-closed checks, and anything a reader might
+  reasonably try to simplify.
+- Do not document what the type system already says.
+- ADRs go in `docs/adr/` as `NNNN-kebab-title.md` with date, status, context, decision and
+  consequences. The consequences section states the cost. That directory does not exist yet; the
+  first ADR creates it.
 
-- `npm run dev` - Quick development preview of all infrastructure layers
-- `npm run start` - Alias for `dev`
-- `npm run build` - Compile TypeScript to JavaScript
-- `npm run test` - Run infrastructure component tests
-- `npm run test:watch` - Run tests in watch mode
-- `npm run test:cov` - Run tests with coverage
-- `npm run test:e2e` - Run end-to-end infrastructure tests
-- `npm run lint` - Run ESLint with auto-fix
-- `npm run format` - Format code with Prettier
+Write for whoever maintains this in six months. Concrete examples over abstract description, one
+idea per paragraph, consistent terminology, code blocks tagged with a language, and tables for
+anything that is really a list of options.
 
-#### Environment Deployments
+## Git workflow
 
-- `npm run deploy:dev` - Deploy all layers to development environment
-- `npm run deploy:val` - Deploy all layers to validation environment
-- `npm run deploy:prd` - Deploy all layers to production environment
-- `npm run destroy:dev` - Destroy all layers in development
-- `npm run destroy:val` - Destroy all layers in validation
-- `npm run destroy:prd` - Destroy all layers in production
-- `npm run preview:dev` - Preview changes in development
-- `npm run preview:val` - Preview changes in validation
-- `npm run preview:prd` - Preview changes in production
+Conventional commits: `type(scope): subject`, where type is one of `feat`, `fix`, `refactor`,
+`docs`, `test`, `chore`, `perf`, `style` or `ci`. Imperative mood, lowercase, no trailing period, 72
+characters or fewer. The body explains why; wrap it at 80. Reference issues with `Closes #123`.
 
-#### Specialized Deployments
+Nothing enforces this — there is no commitlint in this repository. It holds because people and
+agents follow it, which is exactly why it is written down here.
 
-- `npm run deploy:foundation` - Deploy account baseline + networking layers
-- `npm run deploy:platform` - Deploy foundation + services + data layers
-- `npm run destroy:platform` - Destroy platform components only
-- `npm run deploy:multi-region` - Deploy across multiple regions
+- Branch from `main` with a `feature/`, `fix/`, `chore/`, `refactor/`, `docs/` or `ci/` prefix. Keep
+  branches short-lived and delete them after merge.
+- One logical change per pull request. Fill in the template — the test plan and the infrastructure
+  section are read, not decoration.
+- Squash-merge. Never force-push `main`.
 
-#### Custom Orchestration
+Safety, in order of how much damage getting it wrong does:
 
-For advanced scenarios, use the orchestrator directly:
+- Never commit secrets, credentials or tokens. `.env` is git-ignored; `.env.example` carries names
+  and never values.
+- `bun.lock` is the only lockfile. A `package-lock.json`, `pnpm-lock.yaml` or `yarn.lock` appearing
+  in a diff is a bug in how the change was made, not a new option.
+- Never commit generated output — `node_modules/`, `dist/`, `coverage/`, `.pulumi/`.
+- Read `git diff --cached` before committing. Every time.
 
-```bash
-# Deploy specific layers
-npx ts-node src/index.ts deploy prd --scope acct-baseline,net-foundation --regions us-east-1
+## Security
 
-# Multi-region deployment
-npx ts-node src/index.ts deploy prd --scope workload --regions us-east-1,us-west-2
+- Least privilege everywhere, and narrower for anything an agent can reach unattended.
+- Untrusted pull request code never runs with access to secrets. `pull_request_target` is the
+  specific trap; assume any workflow trigger you add is wrong until you have checked it against
+  that.
+- Credentials belong in no commit, log, issue report or pull request description.
+- **Pin GitHub Actions to a full commit SHA of the latest release, with the version as a trailing
+  comment** — `uses: actions/checkout@3d3c42e… # v7.0.1`. A tag is mutable, so a compromised
+  upstream can repoint it at new code; the comment is what makes the pin readable, and Dependabot
+  updates both together. Steps from the same action must share one SHA — `github/codeql-action`
+  errors when `analyze` loads a config that `init` wrote on a different version.
+- Report vulnerabilities privately through the advisory link in `SECURITY.md`, never a public issue.
 
-# Preview specific scope
-npx ts-node src/index.ts preview val --scope svc-platform,stateful-data --regions us-east-1
-```
+## If you are an agent
 
-### Testing Strategy
+You are the subject of this repository, not just a contributor to it. Two rules on top of the
+above:
 
-- **Unit Tests**: Test individual AWS components in isolation
-- **Integration Tests**: Test component interactions and dependencies
-- **E2E Tests**: Test complete infrastructure stack deployments
-- **Coverage Target**: Aim for >80% code coverage
-- **Test Naming**: Describe infrastructure behavior, not implementation
-
-```typescript
-// Good infrastructure test naming
-describe('VpcComponent', () => {
-    it('should create VPC with correct CIDR block', () => {
-        // ...
-    });
-
-    it('should create public and private subnets in multiple AZs', () => {
-        // ...
-    });
-
-    it('should throw error when invalid CIDR block provided', () => {
-        // ...
-    });
-});
-```
-
-## Code Generation Guidelines
-
-### When Creating New Infrastructure
-
-1. **Components**: Create in `src/components/` with proper AWS resource management
-2. **Stacks**: Create in `src/stacks/` for environment-specific deployments
-3. **Configs**: Create in `configs/` for environment-based configuration
-4. **Utils**: Create in `src/utils/` for reusable infrastructure functions
-5. **Tests**: Mirror src structure in test/ directory
-
-### Component Structure Template
-
-```typescript
-/**
- * AWS ECS Service Component - Manages containerized application deployment
- */
-export class EcsServiceComponent extends pulumi.ComponentResource {
-    public readonly service: aws.ecs.Service;
-    public readonly taskDefinition: aws.ecs.TaskDefinition;
-    public readonly targetGroup: aws.lb.TargetGroup;
-
-    constructor(
-        name: string,
-        args: EcsServiceArgs,
-        dependencies: EcsServiceDependencies,
-        opts?: pulumi.ComponentResourceOptions,
-    ) {
-        super('aws:compute:EcsServiceComponent', name, {}, opts);
-
-        this.taskDefinition = this.createTaskDefinition(config);
-        this.targetGroup = this.createTargetGroup(config);
-        this.service = this.createService(config, dependencies);
-
-        this.registerOutputs({
-            service: this.service,
-            taskDefinition: this.taskDefinition,
-            targetGroup: this.targetGroup,
-        });
-    }
-
-    /**
-     * Creates ECS task definition with container specifications
-     */
-    private createTaskDefinition(args: EcsServiceArgs): aws.ecs.TaskDefinition {
-        // Implementation
-    }
-
-    private createTargetGroup(args: EcsServiceArgs): aws.lb.TargetGroup {
-        // Implementation
-    }
-
-    private createService(args: EcsServiceArgs, deps: EcsServiceDependencies): aws.ecs.Service {
-        // Implementation
-    }
-}
-```
-
-### Error Handling Patterns
-
-```typescript
-// Use custom error classes for infrastructure failures
-export class InfrastructureError extends Error {
-    constructor(resource: string, operation: string, cause?: Error) {
-        super(`Failed to ${operation} ${resource}: ${cause?.message || 'Unknown error'}`);
-        this.name = 'InfrastructureError';
-    }
-}
-
-export class ValidationError extends Error {
-    constructor(field: string, value: unknown, requirement: string) {
-        super(`Invalid ${field}: ${value} (${requirement})`);
-        this.name = 'ValidationError';
-    }
-}
-
-// Handle infrastructure operations appropriately
-try {
-    const vpc = await createVpc(config);
-    return vpc;
-} catch (error) {
-    logger.error('VPC creation failed', error);
-    throw new InfrastructureError('VPC', 'create', error);
-}
-```
-
-### Pulumi/AWS Best Practices
-
-- Always use `pulumi.ComponentResource` for complex components
-- Implement proper resource dependencies with `dependsOn`
-- Use `registerOutputs()` for component outputs
-- Handle AWS service limits and quotas gracefully
-- Implement proper resource tagging for cost allocation
-- Use AWS IAM least-privilege access principles
-
-## Dependencies & Libraries
-
-### Core Dependencies
-
-- **@pulumi/pulumi**: Core Pulumi framework for infrastructure as code
-- **@pulumi/aws**: AWS provider for Pulumi
-- **@pulumi/automation**: Pulumi Automation API for programmatic deployments
-- **aws-sdk**: AWS SDK for additional AWS service integrations
-- **lodash**: Use for utility functions (deep merge, cloning configuration objects)
-
-### Development Dependencies
-
-- **@types/\***: Always install type definitions for libraries
-- **jest**: Primary testing framework for infrastructure components
-- **eslint**: Code quality and style enforcement
-- **prettier**: Code formatting
-- **@pulumi/policy**: Policy as code for infrastructure compliance
-
-### Adding New Dependencies
-
-1. Install with proper scope: `npm install package-name`
-2. Add types if needed: `npm install --save-dev @types/package-name`
-3. Update imports to follow project patterns
-4. Add to appropriate tsconfig paths if needed
-5. Consider AWS service limits and Pulumi provider compatibility
-
-## Performance Considerations
-
-- Use Pulumi resource options for parallel deployment where safe
-- Implement proper resource dependencies to avoid circular references
-- Use Pulumi outputs or System Manager parameters for cross-stack references
-- Use Pulumi transformations for bulk resource modifications
-- Consider AWS service limits when designing auto-scaling policies
-
-## Security Guidelines
-
-- Validate all infrastructure inputs using TypeScript interfaces
-- Use AWS SecretManager Parameter Store for secrets management
-- Follow AWS security best practices (encryption, IAM policies, VPC security)
-- Implement least-privilege access principles for all resources
-- Use AWS Security Groups with minimal required access
-- Keep AWS provider and Pulumi dependencies updated
-
-## Documentation Standards
-
-- Use JSDoc comments for all infrastructure components
-- Include examples in component documentation
-- Keep README.md updated with new infrastructure capabilities
-- Document breaking changes in commit messages
-- Maintain infrastructure documentation in docs/ directory
-- Include deployment runbooks and troubleshooting guides
-
-## Git Workflow
-
-- Use conventional commit messages (feat, fix, docs, refactor, etc.)
-- Create feature branches for new infrastructure work
-- **Run `npm test` and ensure all tests pass before committing or merging**
-- **Run `npm run lint` and ensure there are no lint errors before committing or merging**
-- Test infrastructure changes in development environment first
-- Use meaningful commit messages that describe infrastructure changes
-- Squash commits when appropriate for cleaner history
-
-## Environment Setup
-
-This project is designed to work in dev containers and includes:
-
-- Pre-configured TypeScript environment optimized for Pulumi development
-- AWS CLI, Pulumi CLI, and infrastructure tools
-- Git, Docker CLI, and common development tools
-- Debian-based container with modern tooling
-- All necessary VS Code extensions for infrastructure development
-
-## Additional Guidelines
-
-- **JSDoc Comments**: All infrastructure components, interfaces, and methods must include clear and descriptive JSDoc comments with usage examples.
-- **Infrastructure Validation**: Any infrastructure validation scripts created that are not tests should be removed after use to keep the repository clean.
-- **Unit Tests**: Always add unit tests for new infrastructure components, bug fixes, and configuration changes to ensure infrastructure reliability.
-- **Environment Variables**: Use AWS Systems Manager Parameter Store for environment-specific configuration. Document required parameters in environment-specific documentation.
-- **Code Comments**: Provide detailed code comments wherever infrastructure logic is complex or not immediately clear, especially for AWS resource configurations and dependencies.
-- **Cost Optimization**: Always consider AWS costs when designing infrastructure and include cost optimization strategies in component design.
-- **Multi-Region Support**: Design components to be region-agnostic where possible, with us-east-1 as the default region.
-
-When generating infrastructure code, always consider the existing patterns and maintain consistency with the established AWS architecture and Pulumi best practices.
+1. **Stay inside what policy already approves.** A change outside it is not yours to merge — open
+   the pull request, classify the risk, and leave it for a human. Escalating is a successful
+   outcome, not a failure.
+2. **Link your source.** A dependency bump, a security fix, or a config change driven by a vendor
+   release cites the release note, advisory, or post it came from. A reviewer at 9am needs to
+   verify your reasoning without reconstructing your research.
