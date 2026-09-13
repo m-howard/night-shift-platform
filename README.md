@@ -1,8 +1,7 @@
-<h1 align="center">Night Shift</h1>
+<h1 align="center">Night Shift - Platform</h1>
 
 <p align="center">
-  <em>A crew of GitHub Copilot cloud agents that maintains the self-hosted GitHub Actions
-  infrastructure they run on.</em>
+  <em>The self-hosted GitHub Actions infrastructure.</em>
 </p>
 
 <p align="center">
@@ -17,16 +16,7 @@
 
 ## ✨ What this is
 
-Platform teams are asked to do more with fewer hands, but the maintenance never stops: version
-bumps, bug fixes, security findings, and a steady stream of vendor releases.
-
-Night Shift is a working demonstration of the second shift. Agents clock in overnight against this
-repository's own infrastructure — they update dependencies, read release notes and vendor blogs,
-open pull requests, classify each operational change by risk, and auto-deploy the changes policy
-already approves. Everything else escalates to a human in the morning.
-
-The point of the pattern is the boundary: what agents can safely own, what stays gated, and how a
-human keeps control of everything that matters.
+[TBD]
 
 ## 🚀 Quick start
 
@@ -51,18 +41,7 @@ pulumi login --local
 
 > **Status:** the bootstrap stack is written — one runner, not yet a fleet.
 
-The Pulumi stack under `src/` describes the self-hosted Actions runner infrastructure on AWS — the
-same infrastructure the night shift's own jobs execute on, which is what makes the demonstration
-honest. It deploys into a VPC that already exists; this stack never creates one.
-
-| Component            | What it creates                                                            |
-| -------------------- | -------------------------------------------------------------------------- |
-| `ArtifactsBucket`    | S3 bucket for job artifacts and build cache, encrypted, lifecycle-expired. |
-| `RunnerRegistration` | The SSM `SecureString` holding the GitHub registration token.              |
-| `RunnerNetwork`      | Security group with **no ingress** and outbound HTTPS only.                |
-| `RunnerIdentity`     | Instance role, scoped policies and instance profile.                       |
-| `GithubOidc`         | GitHub OIDC provider and the role workflows assume.                        |
-| `RunnerInstance`     | One EC2 runner: no public IP, no key pair, IMDSv2 required.                |
+The Pulumi stack under `src/` describes the self-hosted Actions EKS runner infrastructure on AWS. It deploys into a VPC that already exists; this stack never creates one.
 
 Shell access is AWS Systems Manager Session Manager only — there is no SSH, no key pair and no
 inbound rule. Pure logic (naming, tagging, config validation, IAM documents, the boot script) lives
